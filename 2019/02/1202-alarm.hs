@@ -1,4 +1,5 @@
 import Control.Monad.State
+import Data.List
 
 type Computer = State (Int, [Int])
 
@@ -58,11 +59,21 @@ compute = do instruction <- getInstruction
                                         compute 
                End -> getValue 0
 
+
+computeWithTape tape = evalState compute (0, tape)
+
+modifyTape :: [Int] -> (Int, Int) -> [Int]
+modifyTape (x:_:_:xs) (a, b) = x:a:b:xs
+
+computeWithModification :: [Int] -> (Int, Int) -> Int
+computeWithModification tape modification = computeWithTape $ modifyTape tape modification
+
 main :: IO ()
 main = do tape <- map read . words . map (\c -> if c == ',' then ' ' else c) <$> readFile "input.txt"
-          print $ evalState compute (0, tape)
-
-
-
-
-
+          putStr "Part 1: "
+          print $ computeWithModification tape (12, 2)
+          putStr "Part 2: "
+          let pairs = (,) <$> [0..99] <*> [0..99]
+          case find (\mod -> computeWithModification tape mod == 19690720) pairs of
+                Just (noun, verb) -> print $ 100 * noun + verb
+                Nothing -> error "Bad input?"
