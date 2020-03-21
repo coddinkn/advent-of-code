@@ -1,11 +1,12 @@
 import Data.List (permutations)
 
-import Computer
+import Process
 
-amplify :: [Int] ->  [Int] -> Int
+amplify :: [Int] -> [Int] -> Int
 amplify program modes = let amplifiers = configureAmplifier <$> modes
                         in foldl (flip ($)) 0 amplifiers 
-                        where configureAmplifier mode input = compute program [mode, input]
+                        where configureAmplifier mode input = let (_, _, output) = runProgram program [mode, input]
+                                                              in last output
 
 maxOutput :: [Int] -> Int
 maxOutput program = maximum $ amplify program <$> permutations [0 .. 4]
