@@ -1,4 +1,9 @@
-module Process where
+module Program
+( Program
+, newProgram
+, runProgram    
+, ExecutionState(..)
+) where
 
 import Prelude hiding (Read, error)
 import Control.Monad.RWS
@@ -7,29 +12,30 @@ import Data.List
 
 data Program = Program { instructionPointer :: Int
                        , inputPointer :: Int
-                       , outputPointer :: Int
                        , memory :: [Int]
                        } deriving (Eq, Show)
 
 newProgram :: [Int] -> Program
-newProgram = Program 0 0 0
+newProgram = Program 0 0
 
-data ProcessState = WaitingForInput
-                  | Error String
-                  deriving (Eq, Show)
+data ExecutionState = WaitingForInput
+                    | Error String
+                    deriving (Eq, Show)
 
-error :: String -> Process a
+error :: String -> Execution a
 error message = throwError $ Error message  
 
-input :: Process Int
+input :: Execution Int
 input = do inpPt <- gets inputPointer
            inputLength <- length <$> ask
            if inpPt >= inputLength
-               then throwError WaitingForInput 
-               else do modify $ \program -> program { inputPointer = inpPt + 1 }
-                       flip (!!) inpPt <$> ask
+              then do ip <- gets instructionPointer
+                      setInstructionPointer $ ip - 2
+                      throwError WaitingForInput 
+              else do modify $ \program -> program { inputPointer = inpPt + 1 }
+                      flip (!!) inpPt <$> ask
 
-type Process = ExceptT ProcessState (RWS [Int] [Int] Program)
+type Execution = ExceptT ExecutionState (RWS [Int] [Int] Program)
 
 data ParamType = Read
                | Write
@@ -59,20 +65,20 @@ data Instruction = Add      Mode Mode Mode
                  | End
                  deriving (Eq, Show)
 
-setInstructionPointer :: Int -> Process ()
+setInstructionPointer :: Int -> Execution ()
 setInstructionPointer ip = modify $ \program -> program { instructionPointer = ip } 
 
-next :: Process Int
+next :: Execution Int
 next = do ip <- gets instructionPointer
           setInstructionPointer $ ip + 1
           flip (!!) ip <$> gets memory
 
-parseMode :: Int -> Process Mode
+parseMode :: Int -> Execution Mode
 parseMode 0 = return Position 
 parseMode 1 = return Immediate
 parseMode bad = error $ "bad mode " ++ show bad
 
-parseOperation :: Int -> Process Operation
+parseOperation :: Int -> Execution Operation
 parseOperation operation =
     case operation of
          1  -> return AddOp
@@ -112,7 +118,7 @@ makeInstruction operation modes =
             EqualsOp   -> Equals   (modes !! 0) (modes !! 1) (modes !! 2)
             EndOp -> End
 
-parseInstruction :: Int -> Process Instruction
+parseInstruction :: Int -> Execution Instruction
 parseInstruction opcode =
     uncurry makeInstruction <$> if length digits == 1
                                 then do operation <- parseOperation $ head digits
@@ -124,61 +130,61 @@ parseInstruction opcode =
                                         return (operation, modes)
     where digits = map read . map pure $ show opcode 
 
-getNextInstruction :: Process Instruction
+getNextInstruction :: Execution Instruction
 getNextInstruction = next >>= parseInstruction
 
-getParam :: ParamType -> Mode -> Process Int
+getParam :: ParamType -> Mode -> Execution Int
 getParam paramType mode = case (paramType, mode) of
                                (Read, Position)   -> next >>= getValue
                                (Read, Immediate)  -> next
                                (Write, Position)  -> next
                                (Write, Immediate) -> error "Write parameter Mode not Position"
 
-getValue :: Int -> Process Int
+getValue :: Int -> Execution Int
 getValue position = flip (!!) position <$> gets memory
 
-putValue :: Int -> Int -> Process ()
+putValue :: Int -> Int -> Execution ()
 putValue position value = do (l, r) <- splitAt (position + 1) <$> gets memory
                              let newMemory = take position l ++ pure value ++ r
                              modify $ \program -> program { memory = newMemory } 
 
-process :: Process ()
-process = do instruction <- getNextInstruction
+execute :: Execution ()
+execute = do instruction <- getNextInstruction
              case instruction of 
 
                   Add mode1 mode2 mode3 -> do param1 <- getParam Read  mode1
                                               param2 <- getParam Read  mode2
                                               resPos <- getParam Write mode3
                                               putValue resPos $ param1 + param2
-                                              process
+                                              execute
 
                   Multiply mode1 mode2 mode3 -> do param1 <- getParam Read  mode1
                                                    param2 <- getParam Read  mode2
                                                    resPos <- getParam Write mode3
                                                    putValue resPos $ param1 * param2
-                                                   process
+                                                   execute
 
                   Input mode  -> do resPos <- getParam Write mode 
                                     input >>= putValue resPos
-                                    process
+                                    execute
 
                   Output mode -> do param <- getParam Read mode
                                     tell $ pure param
-                                    process
+                                    execute
 
                   JumpIfTrue mode1 mode2  -> do test <- getParam Read mode1
                                                 ip <- getParam Read mode2
                                                 if test /= 0
                                                    then setInstructionPointer ip
                                                    else return ()
-                                                process
+                                                execute
                   
                   JumpIfFalse mode1 mode2 -> do test <- getParam Read mode1
                                                 ip <- getParam Read mode2
                                                 if test == 0
                                                    then setInstructionPointer ip
                                                    else return ()
-                                                process
+                                                execute
 
                   LessThan mode1 mode2 mode3 -> do param1 <- getParam Read  mode1
                                                    param2 <- getParam Read  mode2
@@ -186,7 +192,7 @@ process = do instruction <- getNextInstruction
                                                    putValue resPos $ if param1 < param2
                                                                      then 1
                                                                      else 0
-                                                   process
+                                                   execute
 
                   Equals mode1 mode2 mode3   -> do param1 <- getParam Read  mode1
                                                    param2 <- getParam Read  mode2
@@ -194,12 +200,12 @@ process = do instruction <- getNextInstruction
                                                    putValue resPos $ if param1 == param2
                                                                      then 1
                                                                      else 0
-                                                   process
+                                                   execute
 
                   End -> return ()
 
 
-runProgram :: [Int] -> [Int] -> (Maybe ProcessState, Program, [Int])
-runProgram memory input = let (result, program, output) = runRWS (runExceptT process) input $ newProgram memory
-                              maybeProcessState = either Just (const Nothing) result
-                          in (maybeProcessState, program, output)       
+runProgram :: Program -> [Int] -> (Maybe ExecutionState, Program, [Int])
+runProgram program input = let (result, nextProgram, output) = runRWS (runExceptT execute) input program
+                               maybeExecutionState = either Just (const Nothing) result
+                           in (maybeExecutionState, nextProgram, output)       
