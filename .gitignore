@@ -6,5 +6,6 @@
 
 **/*.swp
 **/*.hi
+**/example.txt
 **/*.o
 **/solution
